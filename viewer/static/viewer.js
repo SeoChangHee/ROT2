@@ -8,6 +8,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
 
 const USE_GLB = true;                       // false면 조립식 로봇만 사용
 const ROBOT_COLORS = { 'BOT 1': 0xf0ffff, 'BOT 2': 0xe6fbff };
@@ -65,6 +66,7 @@ function resize() {
 addEventListener('resize', resize); resize();
 
 const loader = new GLTFLoader();
+loader.setMeshoptDecoder(MeshoptDecoder);
 let room = { w: 400, d: 300 };
 let roomGroup = null;
 const robots = new Map();      // name -> RobotView
