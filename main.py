@@ -190,7 +190,7 @@ def main():
                                   stt.transcribe_bytes(groq_client, data, mime))
         viewer.start(scene_state.environment(), scene_state.states())
         print("[viewer] http://127.0.0.1:8765 — 채팅창에 입력하거나 🎤/스페이스바로 말하세요")
-    tools.init(scene_state, openai_client, viewer)
+    tools.init(scene_state, viewer)
 
     last_intent = None
     if viewer is not None:

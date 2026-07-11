@@ -3,17 +3,18 @@
 
 STATE = {
     "scene": None,        # SceneState 인스턴스
-    "client": None,       # OpenAI client
     "viewer": None,       # PopupViewer 인스턴스 (없으면 콘솔 fallback)
     "intent": None,       # 현재 턴의 의도층 출력
     "utterance": "",      # 현재 턴의 발화 원문
-    "auto_approve": False,  # 테스트용: ask_user 자동 승인
 }
 
 
-def init(scene_state, client=None, viewer=None):
+def scene():
+    return STATE["scene"]
+
+
+def init(scene_state, viewer=None):
     STATE["scene"] = scene_state
-    STATE["client"] = client
     STATE["viewer"] = viewer
 
 
