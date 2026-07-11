@@ -15,6 +15,7 @@ import config
 import tools
 from agent import ask_intent, run_agent
 from services.scene import SceneState
+from tools import context_tools
 
 DEFAULT_SPACE = "living_room"
 
@@ -30,7 +31,7 @@ def _hitl1_confirm(viewer, message):
         return bool(res.get("approved")), res.get("feedback", "")
     ans = input("[HITL-1] 맞으면 y / 고칠 점 입력: ").strip()   # 콘솔 fallback
     if ans.lower() in ("y", "yes", "", "ㅇ", "네", "좋아"):
-    #오직 이 다섯가지 경우만 채팅에서 승인
+        #오직 이 다섯가지 경우만 채팅에서 승인
         return True, ""
     return False, ans
 
@@ -64,7 +65,8 @@ def _pick_revert_target(scene_state):
 
 
 def _do_revert(scene_state, viewer, intent):
-    """revert를 결정론적으로 처리 (형태층 LLM 스킵). 대상 turn은 의도층이 고른다."""
+    """revert를 결정론적으로 처리 (형태층 LLM 스킵). 대상 turn은 의도층이 고른다.
+    기존 거 삭제, revert_to tool(context_tools)에 있는 걸 import하여 재사용"""
     target = intent.get("revert_to_turn")
     if target is not None:   # LLM이 고른 turn이 현재 상태와 같으면(무변화) 안전망으로 재선택
         entry = next((h for h in scene_state.history if h["turn"] == int(target)), None)
@@ -72,98 +74,100 @@ def _do_revert(scene_state, viewer, intent):
             target = None
     if target is None:
         target = _pick_revert_target(scene_state)   # fallback: 현재와 다른 가장 최근 커밋
-    before_space = scene_state.space
-    entry = scene_state.revert_to(int(target)) if target is not None else None
-    if entry is None:
+    res = context_tools.revert_to(target) if target is not None else {"error": "대상 없음"}
+    if "error" in res:
         print("[revert] 실패: target=%s" % target)
         if viewer:
             viewer.chat("system", "되돌릴 대상을 찾지 못했어요.")
         return
-    if scene_state.space != before_space:
-        tools.push_scene()          # 방까지 바뀌면 scene_change
-    else:
-        tools.push_state()
-    print("[revert] turn %d로 복원" % entry["turn"])
+    print("[revert] turn %d로 복원" % res["turn"])
     if viewer:
         viewer.chat("agent", "이전 배치로 되돌렸어요.")
 
 
-def handle(openai_client, scene_state, text, last_intent, _depth=0):
+def handle(openai_client, scene_state, text, last_intent):
     """발화 하나 처리: 의도층 → HITL-1 → 라우팅 → 형태층."""
     viewer = tools.STATE.get("viewer")
 
-    intent = ask_intent(openai_client, text, last_intent,
-                        room_furniture=scene_state.furniture(),
-                        recent_history=_slim_history(scene_state))
-    if not intent:
-        return last_intent
+    def reask(t):
+        return ask_intent(openai_client, t, last_intent,
+                          room_furniture=scene_state.furniture(),
+                          recent_history=_slim_history(scene_state))
 
-    # 되묻기(clarification): 의도층이 필요하다고 판단하면 HITL 앞단에서 먼저 해소한다 (최대 2회).
-    # 답을 발화에 보태 의도를 재분석 → 정보가 채워진 intent로 HITL-1에 들어간다.
-    for _ in range(2):
-        if not intent.get("needs_clarification"):
-            break
-        q = intent.get("clarification_question") or "조금만 더 자세히 말씀해 주시겠어요?"
-        ans = _ask_clarification(viewer, q)
-        if not ans:
-            break
-        text = text + " / (확인 답변) " + ans
-        intent = ask_intent(openai_client, text, last_intent,
-                            room_furniture=scene_state.furniture(),
-                            recent_history=_slim_history(scene_state))
+    for _ in range(4):   # 발화 1회 + HITL-1 거부 피드백 재시도 3회
+        intent = reask(text)
         if not intent:
             return last_intent
 
-    # 되묻기 한도(2회) 도달 후에도 미해소면: 더 묻지 않고 LLM이 남은 정보를 추론해 채우게 한다.
-    if intent.get("needs_clarification"):
-        text = text + " / (되묻기 한도 도달)"
-        intent = ask_intent(openai_client, text, last_intent,
-                            room_furniture=scene_state.furniture(),
-                            recent_history=_slim_history(scene_state)) or intent
+        # 되묻기(clarification): 의도층이 필요하다고 판단하면 HITL 앞단에서 먼저 해소한다 (최대 2회).
+        # 답을 발화에 보태 의도를 재분석 → 정보가 채워진 intent로 HITL-1에 들어간다.
+        for _ in range(2):
+            if not intent.get("needs_clarification"):
+                break
+            q = intent.get("clarification_question") or "조금만 더 자세히 말씀해 주시겠어요?"
+            ans = _ask_clarification(viewer, q)
+            if not ans:
+                break
+            text = text + " / (확인 답변) " + ans
+            intent = reask(text)
+            if not intent:
+                return last_intent
 
-    confirmation = intent.get("confirmation_message", "")
-    it = intent.get("intent_type")
+        # 되묻기 한도(2회) 도달 후에도 미해소면: 더 묻지 않고 LLM이 남은 정보를 추론해 채우게 한다.
+        if intent.get("needs_clarification"):
+            text = text + " / (되묻기 한도 도달)"
+            intent = reask(text) or intent
 
-    # HITL-1 언어 게이트: 의도를 실행하기 전에 사용자에게 확인받는다.
-    # confirm은 그 자체가 이전 배치에 대한 승인이므로 다시 게이트하지 않는다.
-    if it != "confirm":
-        approved, feedback = _hitl1_confirm(viewer, confirmation)
-        if not approved:
-            if feedback and _depth < 3:   # 피드백을 새 발화로 재분석 (거부된 intent를 맥락으로)
-                return handle(openai_client, scene_state, feedback,
-                              intent, _depth + 1)
+        confirmation = intent.get("confirmation_message", "")
+        it = intent.get("intent_type")
+
+        # HITL-1 언어 게이트: 의도를 실행하기 전에 사용자에게 확인받는다.
+        # confirm은 그 자체가 이전 배치에 대한 승인이므로 다시 게이트하지 않는다.
+        if it != "confirm":
+            approved, feedback = _hitl1_confirm(viewer, confirmation)
+            if not approved:
+                if feedback:   # 피드백을 새 발화로 재분석 (거부된 intent를 맥락으로)
+                    text = feedback
+                    last_intent = intent
+                    continue
+                if viewer:
+                    viewer.chat("system", "요청을 취소했습니다.")
+                print("[HITL-1] 취소")
+                return last_intent
+        else:
+            print("[HITL-1] " + confirmation)
             if viewer:
-                viewer.chat("system", "요청을 취소했습니다.")
-            print("[HITL-1] 취소")
-            return last_intent
-    else:
-        print("[HITL-1] " + confirmation)
-        if viewer:
-            viewer.chat("agent", confirmation)
+                viewer.chat("agent", confirmation)
 
-    if it == "confirm":   # 승인 → 스냅샷 확정 (변화 없으면 재커밋 안 함)
-        entry, changed = scene_state.commit_if_changed("사용자 승인: " + text, "confirm", text)
-        if changed:   # 새로 확정됐을 때만 안내. turn 번호는 내부 개념 — 채팅에 노출하지 않는다
-            print("[commit] turn %d 확정" % entry["turn"])
-            if viewer:
-                viewer.chat("system", "배치가 확정되었습니다.")
+        if it == "confirm":   # 승인 → 스냅샷 확정 (변화 없으면 재커밋 안 함)
+            entry, changed = scene_state.commit_if_changed("사용자 승인: " + text, "confirm", text)
+            if changed:   # 새로 확정됐을 때만 안내. turn 번호는 내부 개념 — 채팅에 노출하지 않는다
+                print("[commit] turn %d 확정" % entry["turn"])
+                if viewer:
+                    viewer.chat("system", "배치가 확정되었습니다.")
+            return intent
+
+        if it == "revert":   # 결정론적 복원 (형태층 LLM 스킵)
+            _do_revert(scene_state, viewer, intent)
+            return intent
+
+        space = intent.get("space")
+        if it == "new_scene" and space not in (None, "unknown") and space != scene_state.space:
+            scene_state.load_scene(space)   # 방 전환 (로봇은 새 방 도크에서 시작)
+            tools.push_scene()
+            print("[scene] %s(으)로 전환" % space)
+
+        answer = run_agent(openai_client, intent, text)
+        # 형태층의 마무리 발화는 채팅에 올리지 않는다 — ask_user 승인 문구·확정 안내와
+        # 내용이 중복되기 때문. 콘솔 로그로만 남긴다.
+        print("[agent] " + str(answer))
         return intent
 
-    if it == "revert":   # 결정론적 복원 (형태층 LLM 스킵)
-        _do_revert(scene_state, viewer, intent)
-        return intent
-
-    space = intent.get("space")
-    if it == "new_scene" and space not in (None, "unknown") and space != scene_state.space:
-        scene_state.load_scene(space)   # 방 전환 (로봇은 새 방 도크에서 시작)
-        tools.push_scene()
-        print("[scene] %s(으)로 전환" % space)
-
-    answer = run_agent(openai_client, intent, text)
-    # 형태층의 마무리 발화는 채팅에 올리지 않는다 — ask_user 승인 문구·확정 안내와
-    # 내용이 중복되기 때문. 콘솔 로그로만 남긴다.
-    print("[agent] " + str(answer))
-    return intent
+    # 재시도 한도 소진 (거부 4회 연속) — 기존 _depth<3 시절과 같은 취소 안내
+    if viewer:
+        viewer.chat("system", "요청을 취소했습니다.")
+    print("[HITL-1] 취소 (재시도 한도)")
+    return last_intent
 
 
 def main():
