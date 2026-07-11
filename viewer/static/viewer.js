@@ -332,13 +332,6 @@ requestAnimationFrame(animate);
 
 // ---------- UI: 채팅 ----------
 const $ = id => document.getElementById(id);
-function subtitle(text, ms = 5000) {
-  const el = $('subtitle');
-  el.textContent = text; el.style.display = 'block';
-  clearTimeout(el._t);
-  el._t = setTimeout(() => el.style.display = 'none', ms);
-}
-
 let pending = null;   // null | 'approval' | 'clarify' — 입력창의 다음 메시지 용도
 function addBubble(who, text) {
   const log = $('chatLog');
@@ -370,22 +363,27 @@ function addApproval(message) {
   b._btns = btns;
 }
 
+// 사용자 텍스트(타이핑·음성 공통)를 pending 상태에 맞는 타입으로 전송
+function dispatchUserText(text) {
+  addBubble('user', text);
+  if (pending === 'clarify') {
+    ws.send(JSON.stringify({ type: 'clarify_answer', answer: text }));
+    pending = null;
+  } else if (pending === 'approval') {
+    ws.send(JSON.stringify({ type: 'user_feedback', approved: false, feedback: text }));
+    document.querySelectorAll('.btns').forEach(e => e.remove());
+    pending = null;
+  } else {
+    ws.send(JSON.stringify({ type: 'user_utterance', text }));
+  }
+}
+
 function sendInput() {
   const inp = $('msgInput');
   const t = inp.value.trim();
   if (!t || !ws || ws.readyState !== 1) return;
   inp.value = '';
-  addBubble('user', t);
-  if (pending === 'clarify') {
-    ws.send(JSON.stringify({ type: 'clarify_answer', answer: t }));
-    pending = null;
-  } else if (pending === 'approval') {
-    ws.send(JSON.stringify({ type: 'user_feedback', approved: false, feedback: t }));
-    document.querySelectorAll('.btns').forEach(e => e.remove());
-    pending = null;
-  } else {
-    ws.send(JSON.stringify({ type: 'user_utterance', text: t }));
-  }
+  dispatchUserText(t);
 }
 $('sendBtn').onclick = sendInput;
 $('msgInput').addEventListener('keydown', e => { if (e.key === 'Enter') sendInput(); });
@@ -427,17 +425,7 @@ async function onRecStop() {
     $('status').textContent = '연결됨';
     const text = (data.text || '').trim();
     if (!text) { addBubble('system', '(음성을 인식하지 못했어요)'); return; }
-    addBubble('user', text);
-    if (pending === 'clarify') {
-      ws.send(JSON.stringify({ type: 'clarify_answer', answer: text }));
-      pending = null;
-    } else if (pending === 'approval') {
-      ws.send(JSON.stringify({ type: 'user_feedback', approved: false, feedback: text }));
-      document.querySelectorAll('.btns').forEach(e => e.remove());
-      pending = null;
-    } else {
-      ws.send(JSON.stringify({ type: 'user_utterance', text }));
-    }
+    dispatchUserText(text);
   } catch (e) {
     $('status').textContent = '연결됨';
     addBubble('system', 'STT 오류: ' + e.message);
@@ -482,8 +470,6 @@ function connect() {
       applyStates(m.states, 0);
     } else if (m.type === 'state_update') {
       applyStates(m.states, m.duration ?? 1.2);
-    } else if (m.type === 'message') {
-      subtitle(m.text);
     } else if (m.type === 'chat') {
       addBubble(m.who || 'agent', m.text);
     } else if (m.type === 'approval_request') {

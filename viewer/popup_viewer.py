@@ -2,7 +2,7 @@
 """FastAPI + WebSocket 뷰어 서버.
 
 파이썬(두뇌)이 push하고 브라우저(three.js)는 받은 대로 그린다 (§9).
-- 메시지 파→브: scene_change / state_update / message / approval_request / clarify_request
+- 메시지 파→브: scene_change / state_update / approval_request / clarify_request
 - 메시지 브→파: user_feedback / clarify_answer / manual_command(baseline, 추후)
 - 재접속 시 즉시 현재 scene + state 스냅샷 push (duration 0) → F5 복구
 """
@@ -137,9 +137,6 @@ class PopupViewer:
         self.snapshot = {"scene": scene, "states": states}
         self._broadcast({"type": "scene_change", "scene": scene,
                          "states": states, "duration": 0})
-
-    def push_message(self, text):
-        self._broadcast({"type": "message", "text": text})
 
     def chat(self, who, text):
         """채팅창에 말풍선 추가 (who: 'agent' | 'user' | 'system')."""

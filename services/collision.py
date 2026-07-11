@@ -139,17 +139,9 @@ def footprint_bbox(state):
 
 # ---------- 충돌 판정 ----------
 
-def robots_collide(a, b, slack=DEFAULT_SLACK):
-    return any(rects_collide(ra, rb, slack) for ra in footprint_rects(a) for rb in footprint_rects(b))
-
 #기존 scene 가구 항목 좌표
 def furniture_rect(f):
     return (f["x"], f["y"], f["w"], f["d"], f.get("rot", 0))
-
-#로봇과 기존 가구 충돌 검사
-def robot_hits_furniture(state, furniture, slack=DEFAULT_SLACK):
-    fr = furniture_rect(furniture)
-    return any(rects_collide(r, fr, slack) for r in footprint_rects(state))
 
 
 def panels_touching(a, side_a, b, side_b, tol=3.0, min_align=30.0):
@@ -186,29 +178,7 @@ def clamp_to_bounds(state, room_w, room_d):
     return st
 
 
-# ---------- 배치 해소 ----------
-
-def place_without_overlap(state, fixed_rects, room_w, room_d,
-                          slack=DEFAULT_SLACK, max_iter=25):
-    """고정 OBB들과 겹치지 않는 위치로 state를 밀어낸 사본 반환. 실패 시 None.
-    fixed_rects: 기존 가구·다른 로봇의 footprint rect 목록."""
-    st = dict(state)
-    for _ in range(max_iter):
-        st = clamp_to_bounds(st, room_w, room_d)
-        worst = None
-        for r in footprint_rects(st):
-            for fr in fixed_rects:
-                depth, axis = obb_penetration(r, fr)
-                if depth > slack and (worst is None or depth > worst[0]):
-                    worst = (depth, axis)
-        if worst is None:
-            return st
-        depth, (ax, ay) = worst
-        step = depth - slack + 0.5
-        st["x"] += step * ax
-        st["y"] += step * ay
-    return None
-
+# ---------- 배치 검증 ----------
 
 def _worst_overlap(rects_a, rects_b, slack=DEFAULT_SLACK):
     """두 rect 목록 사이 최대 침투 (depth, axis). 겹침 없으면 None.

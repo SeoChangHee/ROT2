@@ -25,7 +25,7 @@ class SceneState:
         self.turn = 0
 
     # ---------- 방 ----------
-    #쓰이는 곳 3군데: 시작시 초기 방 로드
+    # 쓰이는 곳 3군데: 시작시 초기 방 로드
     # intent_type이 new_scene이고 space가 바뀔때(방전환 → 이후 코드가 뷰어에 scene_changepush),
     # revert로 다른 방 상태를 복원할 때(이때는 reset_robots = False로 로봇 리셋 없이 방만 로드)
 
@@ -49,19 +49,19 @@ class SceneState:
         return {"robot": name, "active": "inactive", "x": dx, "y": dy, "rot": 0,
                 "panel_left": 0, "panel_right": 0, "furniture": "none"}
 
-#방 json 그대로 반환
+    # 방 json 그대로 반환
     def environment(self):
         return self.scene
 
-#기존 가구 목록만 반환
+    # 기존 가구 목록만 반환
     def furniture(self):
         return (self.scene or {}).get("pre_existing_furniture", [])
 
-#로봇들의 현재 상태
+    # 로봇들의 현재 상태
     def states(self):
         return [dict(self.robots[n]) for n in config.ROBOT_NAMES if n in self.robots]
 
-#snap_panel->각도(rot)보정 함수
+    # 위치 보정
     def _clamp(self, st):
         """footprint(패널 포함)가 방 안에 들어오도록 위치 보정 (코드 보장 레이어)."""
         if self.scene:
@@ -87,7 +87,7 @@ class SceneState:
         self._clamp(st)
         return dict(st)
 
-#초기화 처리
+    # 초기화 처리
     def store(self, name):
         self.robots[name] = self._dock_state(name)
         return dict(self.robots[name])
@@ -121,7 +121,7 @@ class SceneState:
         self.robots = copy.deepcopy(entry["state"])
         return entry
 
-#n턴 전 history조회
+    # 최근 n턴 조회
     def recent(self, n):
         return copy.deepcopy(self.history[-n:])
 
