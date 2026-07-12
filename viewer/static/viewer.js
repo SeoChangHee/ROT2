@@ -120,7 +120,13 @@ function createFloorMaterial() {
 
 // ---------- 방 ----------
 function buildRoom(sceneJson) {
-  if (roomGroup) scene3.remove(roomGroup);
+  if (roomGroup) {
+    scene3.remove(roomGroup);
+    roomGroup.traverse(o => {   // GPU 리소스 해제 (scene_change마다 누적 방지)
+      o.geometry?.dispose();
+      for (const m of [].concat(o.material || [])) { m.map?.dispose(); m.dispose(); }
+    });
+  }
   roomGroup = new THREE.Group();
   room = { w: sceneJson.width, d: sceneJson.depth };
 
@@ -192,8 +198,8 @@ function furnitureMesh(f) {
 // 조립식 fallback: 본체 + 힌지 패널 2개 → 패널이 '스르륵' 펼쳐지는 애니메이션 제공
 function buildFallbackRobot(color) {
   const g = new THREE.Group();
-  const mat = new THREE.MeshStandardMaterial({ color, roughness: .46, metalness: .03 });
-  const pmat = new THREE.MeshStandardMaterial({ color, roughness: .36, metalness: .02, transparent: true, opacity: .96 });
+  const mat = new THREE.MeshStandardMaterial({ color, roughness: .46, metalness: .03, transparent: true, opacity: .95 });
+  const pmat = new THREE.MeshStandardMaterial({ color, roughness: .36, metalness: .02, transparent: true, opacity: .95 });
   const body = new THREE.Mesh(new THREE.BoxGeometry(40, 50, 40), mat);
   body.position.y = 25;
   body.castShadow = true;
@@ -212,6 +218,7 @@ function buildFallbackRobot(color) {
     g.add(hinge);
   }
   g.userData.hinges = hinges;   // rotation.z = ∓angle
+  g.userData.mats = [mat, pmat];   // dim 적용용 (traverse 대신 직접 참조)
   return g;
 }
 
@@ -239,6 +246,17 @@ class RobotView {
     this.rig = new THREE.Group();
     this.fallback = buildFallbackRobot(ROBOT_COLORS[name] || 0x888888);
     this.rig.add(this.fallback);
+    // GLB용 재질은 로봇당 1개만 생성해 스왑 시 재사용 (스왑마다 new → GPU 누수 방지)
+    this.mat = new THREE.MeshStandardMaterial({
+      color: ROBOT_COLORS[name] || 0x888888,
+      emissive: ROBOT_ACCENT_COLORS[name] || 0x7fb9c9,
+      emissiveIntensity: .045,
+      roughness: .42,
+      metalness: .02,
+      side: THREE.DoubleSide,
+      transparent: true,
+      opacity: .95
+    });
     this.glbNode = null;
     this.glbKey = null;      // 현재 화면에 붙은 패널 상태 키
     this.wantKey = null;     // 가장 최근에 요청된 키 (경합 시 최신만 반영)
@@ -258,9 +276,9 @@ class RobotView {
     this.applyDim();
   }
   applyDim() {
-    this.rig.traverse(o => {
-      if (o.material) { o.material.transparent = true; o.material.opacity = .95 * this.dim; }
-    });
+    const op = .95 * this.dim;
+    this.mat.opacity = op;
+    for (const m of this.fallback.userData.mats) m.opacity = op;
   }
   async swapGlb(key) {
     if (key === this.glbKey && this.glbNode) return;   // 이미 그 상태면 스왑 불필요
@@ -278,17 +296,9 @@ class RobotView {
     this.glbNode = tpl.clone(true);
     this.glbNode.traverse(o => {
       if (o.isMesh) {
-        if (o.geometry && !o.geometry.attributes.normal) o.geometry.computeVertexNormals();
         o.castShadow = true;
         o.receiveShadow = true;
-        o.material = new THREE.MeshStandardMaterial({
-          color: ROBOT_COLORS[this.name] || 0x888888,
-          emissive: ROBOT_ACCENT_COLORS[this.name] || 0x7fb9c9,
-          emissiveIntensity: .045,
-          roughness: .42,
-          metalness: .02,
-          side: THREE.DoubleSide
-        });
+        o.material = this.mat;   // material 공유하 사용
       }
     });
     this.rig.add(this.glbNode);
