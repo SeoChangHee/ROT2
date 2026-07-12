@@ -3,6 +3,7 @@
 
 ask_user는 HITL-2 게이트다 — 배치 결과를 사용자에게 한 번 승인받고,
 승인 즉시 코드가 배치를 확정한다. (되묻기는 의도 단계에서 HITL 앞단에 처리 → main.py)"""
+import config
 from tools import STATE
 from tools.context_tools import commit_layout
 
@@ -28,7 +29,7 @@ def ask_user(message):
         for st in STATE["scene"].states():
             print("   ", st)
         ans = input("승인: y / 수정할 점 입력: ").strip()
-        if ans.lower() in ("y", "yes", "", "ㅇ", "좋아"):
+        if ans.lower() in config.APPROVE_WORDS:
             res = {"approved": True, "feedback": ""}
         else:
             res = {"approved": False, "feedback": ans}

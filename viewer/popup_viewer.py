@@ -13,9 +13,9 @@ import queue
 import threading
 import webbrowser
 
+import anyio
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.websockets import WebSocket, WebSocketDisconnect
 import uvicorn
@@ -58,7 +58,6 @@ class PopupViewer:
                 return JSONResponse({"error": "STT 미설정 (GROQ_API_KEY 확인)"}, status_code=503)
             data = await request.body()
             mime = request.headers.get("content-type", "audio/webm")
-            import anyio
             text = await anyio.to_thread.run_sync(self.stt_handler, data, mime)
             return JSONResponse({"text": text})
 

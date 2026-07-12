@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """배치 tool 6개 — LLM에 보이는 껍데기. 내용은 services 호출."""
 import json
+import math
 import os
 
 from tools import STATE, push_state, scene as _scene
@@ -26,7 +27,6 @@ def transform_robot(robot, panel_left, panel_right, furniture):
 
 
 def move_robot(robot, x, y, rot=None):
-    import math
     before = next((s for s in _scene().states() if s["robot"] == robot), None)
     st = _scene().move(robot, x, y, rot)
     # 애니메이션 시간 = 이동 거리 비례 (30cm/s 감각, 0.8~4초 clamp) — 순간이동 방지

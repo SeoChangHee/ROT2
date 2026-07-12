@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """컨텍스트 tool 5개."""
-from tools import STATE, push_state, scene as _scene
+from tools import STATE, push_scene, push_state, scene as _scene
 
 
 def robot_states():
@@ -50,7 +50,6 @@ def revert_to(version):
     if entry is None:
         return {"error": "해당 turn이 history에 없음", "version": version}
     if sc.space != before_space:
-        from tools import push_scene
         push_scene()          # 방까지 바뀌면 scene_change
     else:
         push_state()

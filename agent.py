@@ -7,7 +7,9 @@
 import json
 
 import config
+import tools
 from prompts import AGENT_PROMPT, INTENT_PROMPT, INTENT_SCHEMA, ROBOT_MECHANISM
+from tools import registry
 
 
 # 전사된 텍스트를 OpenAI LLM를 통해 의도 분석
@@ -55,9 +57,6 @@ def run_agent(client, intent, utterance, max_steps=100):
 
     agent.py는 tool을 갖지 않는다 — tool_call(JSON)을 registry.HANDLERS에서
     이름으로 찾아 실행하는 중계자일 뿐이다."""
-    import tools
-    from tools import registry
-
     tools.STATE["intent"] = intent
     tools.STATE["utterance"] = utterance
 
