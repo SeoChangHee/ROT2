@@ -3,12 +3,15 @@
 // 좌표 규약 (collision.py와 일치시킬 것):
 //   방 (x, y) cm, y는 '위쪽' → three: X = x - w/2, Z = d/2 - y (바닥 = XZ 평면)
 //   rot(도, CCW) → rotation.y = rad(rot)  (이 매핑에서 부호가 정확히 일치)
-//   로봇 GLB: 단위 mm(×0.1), 파일명 robot_<L>x<R>.glb, 모델 -z = 왼쪽 패널.
-//   본체 중심 오프셋 (전 파일 공통): (255.922, 342.419(바닥), 87.751) mm
+//   로봇 GLB: robot_animated.glb 1개, 단위 mm(×0.1), 모델 -z = 방의 왼쪽 패널.
+//   본체 중심 오프셋: (255.922, 342.419(바닥), 87.751) mm
+//   패널은 피벗 노드 회전으로 직접 구동 (각도별 파일 스왑 없음).
+//   주의: 모델 노드 명명이 방 규약과 반대 — right_wing_pivot_anim이 -z(왼쪽)에 있음.
+
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { MeshoptDecoder } from 'three/addons/libs/meshopt_decoder.module.js';
+import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 
 const USE_GLB = true;                       // false면 조립식 로봇만 사용
 const ROBOT_COLORS = { 'BOT 1': 0xf0ffff, 'BOT 2': 0xe6fbff };
@@ -66,11 +69,13 @@ function resize() {
 addEventListener('resize', resize); resize();
 
 const loader = new GLTFLoader();
-loader.setMeshoptDecoder(MeshoptDecoder);
+const draco = new DRACOLoader();
+// draco는 native가 아니기 때문에 경로 설정 꼭 필요
+draco.setDecoderPath('https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/libs/draco/');
+loader.setDRACOLoader(draco);
 let room = { w: 400, d: 300 };
 let roomGroup = null;
 const robots = new Map();      // name -> RobotView
-const glbCache = new Map();    // "LxR" -> Promise<scene template>
 
 const X = x => x - room.w / 2;
 const Z = y => room.d / 2 - y;
@@ -222,10 +227,11 @@ function buildFallbackRobot(color) {
   return g;
 }
 
-function glbTemplate(key) {   // key = "LxR"
-  if (!glbCache.has(key)) {
-    glbCache.set(key, new Promise(res => {
-      loader.load(`/models/robot_${key}.glb`, gltf => {
+let robotTemplate = null;   // Promise<wrap|null> — 로봇 GLB는 1개, 전 로봇 공유
+function robotGlbTemplate() {
+  if (!robotTemplate) {
+    robotTemplate = new Promise(res => {
+      loader.load('/models/robot_animated.glb', gltf => {
         const inner = gltf.scene;
         fixMeshGeometry(inner);
         inner.position.set(-255.922, 342.419, -87.751);   // 본체 중심 보정 (mm)
@@ -235,9 +241,9 @@ function glbTemplate(key) {   // key = "LxR"
         wrap.rotation.y = Math.PI / 2;                    // 모델 +z = 오른쪽 패널 → 방 +x
         res(wrap);
       }, undefined, () => res(null));                     // 실패 → fallback 유지
-    }));
+    });
   }
-  return glbCache.get(key);
+  return robotTemplate;
 }
 
 class RobotView {
@@ -257,14 +263,13 @@ class RobotView {
       transparent: true,
       opacity: .95
     });
-    this.glbNode = null;
-    this.glbKey = null;      // 현재 화면에 붙은 패널 상태 키
-    this.wantKey = null;     // 가장 최근에 요청된 키 (경합 시 최신만 반영)
+    this.pivots = null;      // { left, right } — GLB 패널 피벗 노드 (로드 완료 후 세팅)
     this.cur = { x: 0, y: 0, rot: 0, pl: 0, pr: 0 };
     this.tgt = { ...this.cur };
     this.speed = 1;
-    this.dim = 1;            // inactive 흐림 계수 — 비동기 GLB 스왑 후에도 재적용
+    this.dim = 1;            // inactive 흐림 계수 — 비동기 GLB 로드 후에도 재적용
     scene3.add(this.rig);
+    if (USE_GLB) this.attachGlb();
   }
   setTarget(st, duration) {
     this.tgt = { x: st.x, y: st.y, rot: st.rot || 0,
@@ -272,7 +277,6 @@ class RobotView {
     this.speed = duration > 0 ? 1 / duration : 1e6;
     if (duration <= 0) this.cur = { ...this.tgt };
     this.dim = st.active === 'inactive' ? .55 : 1;
-    if (USE_GLB) this.swapGlb(`${this.tgt.pl}x${this.tgt.pr}`);
     this.applyDim();
   }
   applyDim() {
@@ -280,30 +284,25 @@ class RobotView {
     this.mat.opacity = op;
     for (const m of this.fallback.userData.mats) m.opacity = op;
   }
-  async swapGlb(key) {
-    if (key === this.glbKey && this.glbNode) return;   // 이미 그 상태면 스왑 불필요
-    this.wantKey = key;                                // 최신 요청 기록
-    const tpl = await glbTemplate(key);
-    if (key !== this.wantKey) return;                  // 그새 더 최신 요청이 왔으면 이 결과는 폐기 (순서 꼬임 방지)
-    if (tpl === null) {                                // GLB 없음/로드 실패 → 조립식 fallback으로 표시
-      if (this.glbNode) { this.rig.remove(this.glbNode); this.glbNode = null; }
-      this.fallback.visible = true;                    // 패널 변화가 최소한 조립식으로라도 보이게
-      this.glbKey = key;
-      return;
-    }
-    if (this.glbNode) this.rig.remove(this.glbNode);
-    this.glbKey = key;
-    this.glbNode = tpl.clone(true);
-    this.glbNode.traverse(o => {
+  async attachGlb() {
+    const tpl = await robotGlbTemplate();
+    if (tpl === null) return;   // 로드 실패 → 조립식 fallback 유지
+    const node = tpl.clone(true);
+    node.traverse(o => {
       if (o.isMesh) {
         o.castShadow = true;
         o.receiveShadow = true;
-        o.material = this.mat;   // material 공유하 사용
+        o.material = this.mat;   // material 공유 사용
       }
     });
-    this.rig.add(this.glbNode);
+    // 모델 노드 명명이 방 규약과 반대: -z(방 왼쪽) 패널의 피벗이 right_wing_pivot_anim
+    this.pivots = {
+      left: node.getObjectByName('right_wing_pivot_anim'),
+      right: node.getObjectByName('left_wing_pivot_anim')
+    };
+    this.rig.add(node);
     this.fallback.visible = false;
-    this.applyDim();   // 새 재질은 불투명 기본값 — 스왑 완료 시 dim 재적용 (inactive 흐림 유지)
+    this.applyDim();   // 새 재질은 불투명 기본값 — 로드 완료 시 dim 재적용 (inactive 흐림 유지)
   }
   tick(dt) {
     const k = Math.min(1, dt * this.speed * 1.6);
@@ -311,13 +310,23 @@ class RobotView {
     this.cur.y += (this.tgt.y - this.cur.y) * k;
     let dr = ((this.tgt.rot - this.cur.rot + 540) % 360) - 180;   // 최단 경로
     this.cur.rot += dr * k;
-    this.cur.pl += (this.tgt.pl - this.cur.pl) * k;
-    this.cur.pr += (this.tgt.pr - this.cur.pr) * k;
+    // 패널은 이동·회전이 끝난 뒤에만 동작 (이동 중 패널 열림 방지)
+    // 지수 보간은 꼬리가 길어서 임계값 도달 시 스냅해 패널 단계로 넘어감
+    if (Math.abs(this.tgt.x - this.cur.x) < 2 &&
+        Math.abs(this.tgt.y - this.cur.y) < 2 && Math.abs(dr) < 3) {
+      this.cur.x = this.tgt.x; this.cur.y = this.tgt.y; this.cur.rot = this.tgt.rot;
+      this.cur.pl += (this.tgt.pl - this.cur.pl) * k;
+      this.cur.pr += (this.tgt.pr - this.cur.pr) * k;
+    }
     this.rig.position.set(X(this.cur.x), 0, Z(this.cur.y));
     this.rig.rotation.y = THREE.MathUtils.degToRad(this.cur.rot);
     const h = this.fallback.userData.hinges;
     h.left.rotation.z = -THREE.MathUtils.degToRad(this.cur.pl);
     h.right.rotation.z = THREE.MathUtils.degToRad(this.cur.pr);
+    if (this.pivots) {   // GLB 패널: bake된 애니메이션과 같은 축·방향으로 피벗 직접 회전
+      this.pivots.left.rotation.x = THREE.MathUtils.degToRad(this.cur.pl);
+      this.pivots.right.rotation.x = -THREE.MathUtils.degToRad(this.cur.pr);
+    }
   }
 }
 
